@@ -288,4 +288,150 @@ final class StatusPollerParsingTests: XCTestCase {
             "-Users-yuho--claude-plugins-cache-some-plugin"
         )
     }
+
+    // MARK: - parseLastEntry 跳过本地命令
+
+    func testLastEntrySkipsLocalCommand() {
+        let content = """
+        {"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn"}}
+        {"type":"user","message":{"content":"<command-name>/compact</command-name>"}}
+        """
+        XCTAssert(StatusPoller.parseLastEntry(from: content) == .assistantDone)
+    }
+
+    func testLastEntrySkipsLocalCommandStdout() {
+        let content = """
+        {"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn"}}
+        {"type":"user","message":{"content":"<local-command-stdout>Compacted</local-command-stdout>"}}
+        """
+        XCTAssert(StatusPoller.parseLastEntry(from: content) == .assistantDone)
+    }
+
+    func testLastEntrySkipsLocalCommandCaveat() {
+        let content = """
+        {"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn"}}
+        {"type":"user","message":{"content":"<local-command-caveat>Caveat: messages below were generated locally</local-command-caveat>"}}
+        """
+        XCTAssert(StatusPoller.parseLastEntry(from: content) == .assistantDone)
+    }
+
+    func testLastEntrySkipsContextContinuation() {
+        let content = """
+        {"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn"}}
+        {"type":"user","message":{"content":"This session is being continued from a previous conversation that ran out of context."}}
+        """
+        XCTAssert(StatusPoller.parseLastEntry(from: content) == .assistantDone)
+    }
+
+    func testLastEntrySkipsMultipleLocalCommandsThenFindsAssistant() {
+        // 模拟 /compact 后的完整 jsonl 尾部
+        let content = """
+        {"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn"}}
+        {"type":"last-prompt","lastPrompt":"fix bug"}
+        {"type":"file-history-snapshot","data":{}}
+        {"type":"system","message":"context reset"}
+        {"type":"user","message":{"content":"This session is being continued from a previous conversation"}}
+        {"type":"user","message":{"content":"<local-command-caveat>Caveat</local-command-caveat>"}}
+        {"type":"user","message":{"content":"<command-name>/compact</command-name>"}}
+        {"type":"user","message":{"content":"<local-command-stdout>Compacted</local-command-stdout>"}}
+        """
+        XCTAssert(StatusPoller.parseLastEntry(from: content) == .assistantDone)
+    }
+
+    func testLastEntryRealUserMessageAfterLocalCommands() {
+        // 本地命令后又有真实用户消息
+        let content = """
+        {"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn"}}
+        {"type":"user","message":{"content":"<command-name>/compact</command-name>"}}
+        {"type":"user","message":{"content":"请帮我修复这个 bug"}}
+        """
+        XCTAssert(StatusPoller.parseLastEntry(from: content) == .userMessage)
+    }
+
+    func testLastEntryUserMessageWithStringFormat() {
+        // user message 的 message 字段是纯字符串而非对象
+        let content = #"{"type":"user","message":"plain text prompt"}"#
+        XCTAssert(StatusPoller.parseLastEntry(from: content) == .userMessage)
+    }
+
+    // MARK: - inferStatus 跳过本地命令后的状态
+
+    func testInferStatusIdleAfterCompact() {
+        let content = """
+        {"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn"}}
+        {"type":"user","message":{"content":"<command-name>/compact</command-name>"}}
+        {"type":"user","message":{"content":"<local-command-stdout>Compacted</local-command-stdout>"}}
+        """
+        XCTAssertEqual(StatusPoller.inferStatus(from: content, timeSinceUpdate: 120), .idle)
+    }
+}
+
+// MARK: - SessionStore Mock
+
+final class SessionStoreMockTests: XCTestCase {
+
+    func testMockStoreHasFiveSessions() {
+        let store = SessionStore.mock()
+        XCTAssertEqual(store.sessions.count, 5)
+    }
+
+    func testMockStoreHasAllStatuses() {
+        let store = SessionStore.mock()
+        let statuses = Set(store.sessions.map { $0.status })
+        XCTAssertTrue(statuses.contains(.working))
+        XCTAssertTrue(statuses.contains(.waitingInput))
+        XCTAssertTrue(statuses.contains(.idle))
+    }
+
+    func testMockStoreHasMultipleAgentTypes() {
+        let store = SessionStore.mock()
+        let types = Set(store.sessions.map { $0.agentType })
+        XCTAssertTrue(types.contains(.claude))
+        XCTAssertTrue(types.contains(.codex))
+        XCTAssertTrue(types.contains(.gemini))
+    }
+
+    func testMockStoreHasJustCompleted() {
+        let store = SessionStore.mock()
+        let completed = store.sessions.filter { $0.justCompleted }
+        XCTAssertEqual(completed.count, 1)
+        XCTAssertEqual(completed[0].status, .idle)
+    }
+
+    func testMockStoreSessionsHaveTokens() {
+        let store = SessionStore.mock()
+        let withTokens = store.sessions.filter { $0.totalTokens > 0 }
+        XCTAssertGreaterThanOrEqual(withTokens.count, 3)
+    }
+}
+
+// MARK: - SessionStore justCompleted
+
+final class SessionStoreJustCompletedTests: XCTestCase {
+
+    func testWorkingToIdleSetsJustCompleted() {
+        let store = SessionStore()
+        store.upsert(Session(id: "1", pid: 1, cwd: "/tmp", startedAt: Date(), agentType: .claude))
+        store.updateStatus(sessionId: "1", status: .working)
+        store.updateStatus(sessionId: "1", status: .idle)
+        XCTAssertTrue(store.sessions[0].justCompleted)
+    }
+
+    func testUnknownToIdleDoesNotSetJustCompleted() {
+        let store = SessionStore()
+        store.upsert(Session(id: "1", pid: 1, cwd: "/tmp", startedAt: Date(), agentType: .claude))
+        store.updateStatus(sessionId: "1", status: .idle)
+        XCTAssertFalse(store.sessions[0].justCompleted)
+    }
+
+    func testClearJustCompleted() {
+        let store = SessionStore()
+        store.upsert(Session(id: "1", pid: 1, cwd: "/tmp", startedAt: Date(), agentType: .claude))
+        store.updateStatus(sessionId: "1", status: .working)
+        store.updateStatus(sessionId: "1", status: .idle)
+        XCTAssertTrue(store.sessions[0].justCompleted)
+
+        store.clearJustCompleted(sessionId: "1")
+        XCTAssertFalse(store.sessions[0].justCompleted)
+    }
 }

@@ -135,10 +135,8 @@ class StatusPoller {
         let exactPath = "\(projectsDir)/\(encodedCwd)/\(sessionId).jsonl"
         let projectDir = "\(projectsDir)/\(encodedCwd)"
 
-        // 精确匹配的 jsonl 最近有更新，直接用
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: exactPath),
-           let modDate = attrs[.modificationDate] as? Date,
-           Date().timeIntervalSince(modDate) < staleThreshold {
+        // 精确匹配的 jsonl 存在，直接用
+        if FileManager.default.fileExists(atPath: exactPath) {
             resolvedPaths[cacheKey] = (exactPath, Date())
             return exactPath
         }
@@ -159,8 +157,12 @@ class StatusPoller {
             .max(by: { $0.1 < $1.1 })
 
         let result: String
-        if let newest = newest,
-           Date().timeIntervalSince(newest.1) < staleThreshold {
+        let exactExists = FileManager.default.fileExists(atPath: exactPath)
+        if exactExists {
+            // 精确文件存在，即使不新鲜也用它
+            result = exactPath
+        } else if let newest = newest {
+            // 精确文件不存在（sessionId 变了），用同目录最新的 jsonl
             result = newest.0
         } else {
             result = exactPath
