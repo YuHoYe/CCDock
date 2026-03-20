@@ -82,16 +82,29 @@ struct ToolbarButton: View {
     let help: String
     let action: () -> Void
     @State private var isHovered = false
+    @State private var isPressed = false
 
     var body: some View {
-        Button(action: action) {
+        Button(action: {
+            withAnimation(.easeOut(duration: 0.08)) { isPressed = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                withAnimation(.easeOut(duration: 0.1)) { isPressed = false }
+            }
+            action()
+        }) {
             Image(systemName: icon)
                 .font(.system(size: 12))
                 .foregroundStyle(isHovered ? .primary : .secondary)
                 .frame(width: 24, height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(isPressed ? Color.primary.opacity(0.15) : (isHovered ? Color.primary.opacity(0.08) : .clear))
+                )
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .scaleEffect(isPressed ? 0.88 : 1.0)
+        .animation(.easeOut(duration: 0.1), value: isPressed)
         .onHover { isHovered = $0 }
         .help(help)
     }
@@ -159,14 +172,15 @@ struct SessionRowView: View {
     @State private var isHovered = false
     @State private var isPressed = false
     @State private var barPulsing = false
+    @State private var flashOpacity: Double = 0
 
     var body: some View {
         HStack(spacing: 12) {
             // 左侧：项目名 + badge + 状态时长 + prompt
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
                     Text(session.projectName)
-                        .font(.system(size: 15, weight: .bold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(titleColor)
                         .lineLimit(1)
                     StatusBadge(session: session)
@@ -175,7 +189,7 @@ struct SessionRowView: View {
                 // 等待输入时：单独一行突出显示等待时长
                 if session.status == .waitingInput {
                     Text("等待 \(session.statusDurationText.isEmpty ? "刚刚" : session.statusDurationText)")
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(.orange)
                         .opacity(barPulsing ? 1.0 : 0.5)
                         .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: barPulsing)
@@ -192,13 +206,13 @@ struct SessionRowView: View {
 
             Spacer()
 
-            // 右侧：总时长 + 统计（降低视觉权重）
-            VStack(alignment: .trailing, spacing: 3) {
+            // 右侧：总时长 + 统计
+            VStack(alignment: .trailing, spacing: 2) {
                 Text(session.durationText)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(session.status == .idle ? .quaternary : .tertiary)
 
-                HStack(spacing: 6) {
+                HStack(spacing: 4) {
                     if session.turnCount > 0 {
                         Text("\(session.turnCount) 轮")
                             .font(.system(size: 10))
@@ -212,11 +226,16 @@ struct SessionRowView: View {
                 }
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(statusBackgroundColor)
+                .fill(isPressed ? statusAccentColor.opacity(0.25) : statusBackgroundColor)
+        )
+        // 点击成功后的白色闪烁
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.white.opacity(flashOpacity))
         )
         // 左侧彩色边条
         .overlay(alignment: .leading) {
@@ -233,15 +252,20 @@ struct SessionRowView: View {
                 )
         }
         .onAppear { barPulsing = true }
-        .scaleEffect(isPressed ? 0.97 : 1.0)
+        .scaleEffect(isPressed ? 0.95 : 1.0)
         .animation(.easeInOut(duration: 0.3), value: session.status)
         .animation(.easeOut(duration: 0.15), value: isPressed)
         .animation(.easeOut(duration: 0.15), value: isHovered)
         .onHover { isHovered = $0 }
         .onTapGesture {
-            withAnimation(.easeOut(duration: 0.1)) { isPressed = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            withAnimation(.easeOut(duration: 0.08)) { isPressed = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                 withAnimation(.easeOut(duration: 0.1)) { isPressed = false }
+                // 点击成功的闪烁反馈
+                withAnimation(.easeIn(duration: 0.05)) { flashOpacity = 0.15 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    withAnimation(.easeOut(duration: 0.2)) { flashOpacity = 0 }
+                }
                 onTap()
             }
         }
@@ -285,23 +309,23 @@ struct StatusBadge: View {
     let session: Session
 
     var body: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 2) {
             if session.status == .waitingInput {
                 Text("⚠")
-                    .font(.system(size: 10))
+                    .font(.system(size: 9))
             }
             if session.status == .idle {
                 Text(session.justCompleted ? "✅" : "✓")
-                    .font(.system(size: 10))
+                    .font(.system(size: 9))
             }
             Text(badgeText)
-                .font(.system(size: 11, weight: badgeWeight))
+                .font(.system(size: 10, weight: badgeWeight))
         }
         .foregroundStyle(badgeTextColor)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 2)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 1)
         .background(badgeBackground)
-        .cornerRadius(4)
+        .cornerRadius(3)
     }
 
     private var badgeText: String {
@@ -359,17 +383,17 @@ struct StatusBarView: View {
 
         HStack(spacing: 0) {
             Text(summaryText(total: total, working: workingCount, waiting: waitingCount))
-                .font(.system(size: 12))
+                .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Spacer()
             if totalTokens > 0 {
                 Text(formatTokens(totalTokens))
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.tertiary)
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.vertical, 5)
     }
 
     private func summaryText(total: Int, working: Int, waiting: Int) -> String {
@@ -392,7 +416,12 @@ struct SessionListView: View {
     let store: SessionStore
     let activator: TerminalActivator
 
+    // 每 30 秒 tick 一次，驱动 statusDurationText / durationText 刷新
+    @State private var tick = false
+    private let timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+
     var body: some View {
+        let _ = tick // 读一下 tick，建立依赖
         if store.sessions.isEmpty {
             VStack(spacing: 6) {
                 Image(systemName: "terminal")
@@ -418,6 +447,7 @@ struct SessionListView: View {
                 .padding(.horizontal, 4)
                 .padding(.vertical, 4)
             }
+            .onReceive(timer) { _ in tick.toggle() }
         }
     }
 }
