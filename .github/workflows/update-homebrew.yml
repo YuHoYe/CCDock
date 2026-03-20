@@ -1,0 +1,76 @@
+name: Update Homebrew
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-cask:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+          # 等待 CCDock.zip 上传（手动发布时可能还没附件）
+          for i in $(seq 1 30); do
+            URL=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[] | select(.name=="CCDock.zip") | .url')
+            if [ -n "$URL" ]; then
+              echo "Asset found"
+              break
+            fi
+            echo "Waiting for CCDock.zip... ($i/30)"
+            sleep 10
+          done
+
+      - name: Download and checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern "CCDock.zip"
+          SHA=$(shasum -a 256 CCDock.zip | awk '{print $1}')
+          echo "SHA256=$SHA" >> $GITHUB_ENV
+          echo "SHA256: $SHA"
+
+      - name: Update Homebrew cask
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          # 获取当前文件 SHA（git blob SHA，非 checksum）
+          FILE_SHA=$(curl -s -H "Authorization: token $HOMEBREW_TAP_TOKEN" \
+            https://api.github.com/repos/YuHoYe/homebrew-tap/contents/Casks/ccdock.rb \
+            | jq -r '.sha')
+
+          # 生成新的 cask 内容
+          CASK=$(cat <<RUBY
+          cask "ccdock" do
+            version "${{ env.VERSION }}"
+            sha256 "${{ env.SHA256 }}"
+
+            url "https://github.com/YuHoYe/CCDock/releases/download/v#{version}/CCDock.zip"
+            name "CCDock"
+            desc "macOS menubar app for monitoring Claude Code, Codex, and Gemini CLI sessions"
+            homepage "https://github.com/YuHoYe/CCDock"
+
+            depends_on macos: ">= :sonoma"
+
+            app "CCDock.app"
+
+            zap trash: [
+              "~/Library/Preferences/com.yuho.CCDock.plist",
+            ]
+          end
+          RUBY
+          )
+
+          ENCODED=$(echo "$CASK" | base64 -w 0)
+
+          curl -s -X PUT \
+            -H "Authorization: token $HOMEBREW_TAP_TOKEN" \
+            -H "Content-Type: application/json" \
+            https://api.github.com/repos/YuHoYe/homebrew-tap/contents/Casks/ccdock.rb \
+            -d "{\"message\":\"Update CCDock to v${{ env.VERSION }}\",\"content\":\"$ENCODED\",\"sha\":\"$FILE_SHA\"}" \
+            | jq '{commit: .commit.html_url}'
