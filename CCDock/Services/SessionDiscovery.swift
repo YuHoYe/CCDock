@@ -100,7 +100,7 @@ class SessionDiscovery {
             guard let cwd = getCwd(for: pid) else { continue }
 
             // 在 projects 目录下找到对应 cwd 的 jsonl 文件
-            let encodedCwd = cwd.replacingOccurrences(of: "/", with: "-")
+            let encodedCwd = StatusPoller.encodeCwd(cwd)
             let projectDir = "\(projectsDir)/\(encodedCwd)"
 
             guard let sessionId = findActiveSessionId(in: projectDir) else { continue }
