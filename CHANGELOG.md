@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.1] - 2026-03-20
+
+### Fixed
+
+- Improve text readability on glass background — replace faint quaternary/tertiary colors with secondary for better contrast
+- Session status showing "unknown" when sessionId changes after `/compact` — jsonl path fallback no longer requires file freshness
+
+### Added
+
+- 20 new test cases covering local command skipping, context continuation, mock store, and justCompleted logic (26→46 total)
+
 ## [1.4.0] - 2026-03-20
 
 ### Added
