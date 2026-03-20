@@ -200,7 +200,7 @@ struct SessionRowView: View {
                     let truncated = prompt.count > 40 ? String(prompt.prefix(40)) + "…" : prompt
                     Text(truncated)
                         .font(.system(size: 11))
-                        .foregroundStyle(session.status == .idle ? .quaternary : .tertiary)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }
@@ -211,18 +211,18 @@ struct SessionRowView: View {
             VStack(alignment: .trailing, spacing: 2) {
                 Text(session.durationText)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(session.status == .idle ? .quaternary : .tertiary)
+                    .foregroundStyle(.secondary)
 
                 HStack(spacing: 4) {
                     if session.turnCount > 0 {
                         Text("\(session.turnCount) 轮")
                             .font(.system(size: 10))
-                            .foregroundStyle(.quaternary)
+                            .foregroundStyle(.secondary)
                     }
                     if !session.tokenText.isEmpty {
                         Text(session.tokenText)
                             .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.quaternary)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -365,7 +365,7 @@ struct StatusBadge: View {
         switch session.status {
         case .working: return .blue
         case .waitingInput: return .black
-        case .idle: return .green.opacity(0.7)
+        case .idle: return .green.opacity(0.8)
         case .unknown: return .gray
         }
     }
@@ -390,7 +390,7 @@ struct StatusBarView: View {
             if totalTokens > 0 {
                 Text(formatTokens(totalTokens))
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(.horizontal, 12)
@@ -443,7 +443,7 @@ struct SessionListView: View {
             VStack(spacing: 6) {
                 Image(systemName: "terminal")
                     .font(.system(size: 20))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                 Text("没有活跃的会话")
                     .foregroundStyle(.secondary)
                     .font(.system(size: 12))
