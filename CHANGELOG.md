@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.0] - 2025-03-20
+
+### Added
+
+- Unit tests (26 tests) covering Session model, SessionStore, and JSONL parsing
+- Process-scan fallback for session discovery on older Claude Code versions
+- CI now runs tests on every push/PR
+
+### Fixed
+
+- Layout editor crash when clicking settings button twice
+- Session discovery failure when `~/.claude/sessions/` directory doesn't exist
+
 ## [1.2.0] - 2025-03-20
 
 ### Changed
@@ -44,6 +57,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Homebrew Cask installation support
 - Code signed and notarized for macOS Gatekeeper
 
+[1.3.0]: https://github.com/YuHoYe/CCDock/releases/tag/v1.3.0
 [1.2.0]: https://github.com/YuHoYe/CCDock/releases/tag/v1.2.0
 [1.1.0]: https://github.com/YuHoYe/CCDock/releases/tag/v1.1.0
 [1.0.0]: https://github.com/YuHoYe/CCDock/releases/tag/v1.0.0
