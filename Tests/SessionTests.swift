@@ -256,4 +256,36 @@ final class StatusPollerParsingTests: XCTestCase {
         XCTAssertEqual(m.turnCount, 0)
         XCTAssertEqual(m.tokens, 0)
     }
+
+    // MARK: - encodeCwd
+
+    func testEncodeCwdNormalPath() {
+        XCTAssertEqual(
+            StatusPoller.encodeCwd("/Users/test/Developer/MyProject"),
+            "-Users-test-Developer-MyProject"
+        )
+    }
+
+    func testEncodeCwdWorktreePath() {
+        // worktree 路径包含 .claude，. 需要被删除
+        XCTAssertEqual(
+            StatusPoller.encodeCwd("/Users/yuho/Developer/CCDock/.claude/worktrees/sprightly-hatching-kettle"),
+            "-Users-yuho-Developer-CCDock--claude-worktrees-sprightly-hatching-kettle"
+        )
+    }
+
+    func testEncodeCwdDotInPath() {
+        // 路径中有多个 .（如 .config、.local），. 替换为 -
+        XCTAssertEqual(
+            StatusPoller.encodeCwd("/Users/yuho/.config/.local/project"),
+            "-Users-yuho--config--local-project"
+        )
+    }
+
+    func testEncodeCwdHiddenPluginsCachePath() {
+        XCTAssertEqual(
+            StatusPoller.encodeCwd("/Users/yuho/.claude/plugins-cache/some-plugin"),
+            "-Users-yuho--claude-plugins-cache-some-plugin"
+        )
+    }
 }

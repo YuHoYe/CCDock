@@ -131,7 +131,7 @@ class StatusPoller {
             return cached.path
         }
 
-        let encodedCwd = cwd.replacingOccurrences(of: "/", with: "-")
+        let encodedCwd = StatusPoller.encodeCwd(cwd)
         let exactPath = "\(projectsDir)/\(encodedCwd)/\(sessionId).jsonl"
         let projectDir = "\(projectsDir)/\(encodedCwd)"
 
@@ -167,6 +167,12 @@ class StatusPoller {
         }
         resolvedPaths[cacheKey] = (result, Date())
         return result
+    }
+
+    /// 将 cwd 路径编码为 Claude Code projects 目录名
+    /// Claude Code 的规则：/ 和 . 都替换为 -
+    static func encodeCwd(_ cwd: String) -> String {
+        cwd.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
     }
 
     // MARK: - 纯函数（可测试）
