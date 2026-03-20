@@ -9,11 +9,9 @@
 
 在日常开发中，你可能同时运行多个 Claude Code、Codex 或 Gemini CLI 会话处理不同项目。CCDock 常驻菜单栏，让你一眼看清所有会话状态，点击即跳转到对应终端窗口。
 
-<!--
-## Screenshots
-
-TODO: 添加应用截图
--->
+<p align="center">
+  <img src="docs/screenshot-panel.png" width="380" alt="CCDock 悬浮面板">
+</p>
 
 ## ✨ Features
 

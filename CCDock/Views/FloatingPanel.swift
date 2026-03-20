@@ -1,19 +1,23 @@
 import AppKit
 import SwiftUI
 
+/// 让 NSHostingView 接受首次鼠标点击，从其他窗口切过来时单击即可触发操作
+private class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 /// 毛玻璃无标题栏悬浮面板，高度跟随内容自适应
 class FloatingPanel: NSPanel {
     private var sizeObservation: NSKeyValueObservation?
     private let hostingView: NSHostingView<AnyView>
 
     init<Content: View>(rootView: Content) {
-        let hosting = NSHostingView(
-            rootView: AnyView(
-                rootView.background(
-                    VisualEffectBackground(material: .hudWindow, blendingMode: .behindWindow)
-                )
+        let wrapped = AnyView(
+            rootView.background(
+                VisualEffectBackground(material: .hudWindow, blendingMode: .behindWindow)
             )
         )
+        let hosting = FirstMouseHostingView(rootView: wrapped)
         self.hostingView = hosting
 
         super.init(
@@ -81,7 +85,8 @@ class FloatingPanel: NSPanel {
         self.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
-    override var canBecomeKey: Bool { true }
+    // false: 面板不抢 key window，点击直接触发操作，无需先激活
+    override var canBecomeKey: Bool { false }
 }
 
 /// NSVisualEffectView 的 SwiftUI 包装

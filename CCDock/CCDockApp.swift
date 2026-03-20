@@ -20,7 +20,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var welcomeWindow: NSWindow?
     private var eventMonitor: Any?
 
-    let store = SessionStore()
+    private static let isDemo = CommandLine.arguments.contains("--demo")
+
+    let store: SessionStore = AppDelegate.isDemo ? .mock() : SessionStore()
     private var discovery: SessionDiscovery?
     private var codexDiscovery: CodexDiscovery?
     private var geminiDiscovery: GeminiDiscovery?
@@ -38,8 +40,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupAppIcon()
         setupMenuBar()
         setupPopover()
-        startServices()
-        showWelcomeIfFirstLaunch()
+
+        if AppDelegate.isDemo {
+            // Demo 模式：直接显示 Pin 面板，不启动后台服务
+            isPinned = true
+            // 延迟截图，等渲染完成
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.capturePanel()
+            }
+        } else {
+            startServices()
+            showWelcomeIfFirstLaunch()
+        }
     }
 
     private func setupAppIcon() {
@@ -213,6 +225,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         codexPoller = CodexPoller(store: store)
         codexPoller?.start()
+    }
+
+    // MARK: - Demo 截图
+
+    private func capturePanel() {
+        guard let panel = panel, let view = panel.contentView else { return }
+        let bounds = view.bounds
+        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: bounds) else { return }
+        view.cacheDisplay(in: bounds, to: bitmap)
+
+        let image = NSImage(size: bounds.size)
+        image.addRepresentation(bitmap)
+
+        guard let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let pngData = rep.representation(using: .png, properties: [:]) else { return }
+
+        // 保存到项目 docs/ 目录
+        let outputPath = CommandLine.arguments.first(where: { $0.hasPrefix("--output=") })?.dropFirst("--output=".count)
+            ?? "\(FileManager.default.currentDirectoryPath)/docs/screenshot-panel.png"
+        let url = URL(fileURLWithPath: String(outputPath))
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? pngData.write(to: url)
+        print("[demo] Screenshot saved to \(url.path)")
     }
 
     // MARK: - Event Monitor

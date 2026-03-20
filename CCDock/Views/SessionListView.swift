@@ -13,7 +13,7 @@ struct PopoverContentView: View {
             Divider().opacity(0.3)
             StatusBarView(sessions: delegate.store.sessions)
         }
-        .frame(minWidth: 320, idealWidth: 380, maxHeight: 520)
+        .frame(minWidth: 320, idealWidth: 380)
         .focusEffectDisabled()
     }
 }
@@ -45,6 +45,7 @@ struct PinnedContentView: View {
             Divider().opacity(0.3)
             StatusBarView(sessions: delegate.store.sessions)
         }
+        .frame(minWidth: 320, idealWidth: 380)
         .focusEffectDisabled()
     }
 }
@@ -410,6 +411,15 @@ struct StatusBarView: View {
     }
 }
 
+// MARK: - 内容高度测量
+
+private struct ContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 // MARK: - 会话列表
 
 struct SessionListView: View {
@@ -418,7 +428,14 @@ struct SessionListView: View {
 
     // 每 30 秒 tick 一次，驱动 statusDurationText / durationText 刷新
     @State private var tick = false
+    @State private var contentHeight: CGFloat = 0
     private let timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+
+    // 列表最大高度：超过后出现滚动
+    private var maxListHeight: CGFloat {
+        let screenHeight = NSScreen.main?.visibleFrame.height ?? 800
+        return screenHeight * 0.7
+    }
 
     var body: some View {
         let _ = tick // 读一下 tick，建立依赖
@@ -446,7 +463,15 @@ struct SessionListView: View {
                 }
                 .padding(.horizontal, 4)
                 .padding(.vertical, 4)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.preference(key: ContentHeightKey.self, value: geo.size.height)
+                    }
+                )
             }
+            // contentHeight 为 0 时不约束高度，避免布局死锁
+            .frame(height: contentHeight > 0 ? min(contentHeight, maxListHeight) : nil)
+            .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
             .onReceive(timer) { _ in tick.toggle() }
         }
     }

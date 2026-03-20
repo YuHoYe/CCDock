@@ -195,7 +195,20 @@ class StatusPoller {
                 continue
             }
 
-            if type == "user" { return .userMessage }
+            if type == "user" {
+                // 跳过本地命令（/compact 等）和 context continuation 摘要
+                let content: String
+                if let message = obj["message"] as? [String: Any] {
+                    content = message["content"] as? String ?? ""
+                } else {
+                    content = obj["message"] as? String ?? ""
+                }
+                let isLocalCommand = content.contains("<command-name>")
+                    || content.contains("<local-command")
+                let isContextContinuation = content.hasPrefix("This session is being continued")
+                if !isLocalCommand && !isContextContinuation { return .userMessage }
+                continue
+            }
 
             if type == "assistant" {
                 if let message = obj["message"] as? [String: Any],
