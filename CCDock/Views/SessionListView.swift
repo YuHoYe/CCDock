@@ -13,7 +13,7 @@ struct PopoverContentView: View {
             Divider().opacity(0.3)
             StatusBarView(sessions: delegate.store.sessions)
         }
-        .frame(width: 340)
+        .frame(width: 380)
         .focusEffectDisabled()
     }
 }
@@ -141,70 +141,78 @@ struct StatusDot: View {
     }
 }
 
-// MARK: - 单行会话（基于槽位布局渲染）
+// MARK: - 单行会话（方案 C：彩色左边条 + Badge + 状态时长）
 
 struct SessionRowView: View {
     let session: Session
     let onTap: () -> Void
-    private let settings = AppSettings.shared
 
     @State private var isHovered = false
     @State private var isPressed = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            // Leading slot
-            ForEach(settings.fields(in: .leading)) { field in
-                fieldView(field)
-            }
-
-            // Title + subtitle
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+        HStack(spacing: 12) {
+            // 左侧：项目名 + badge + 状态时长 + prompt
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
                     Text(session.projectName)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(titleColor)
                         .lineLimit(1)
-                    ForEach(settings.fields(in: .titleTrailing)) { field in
-                        fieldView(field)
-                    }
+                    StatusBadge(session: session)
                 }
 
-                let subtitleFields = settings.fields(in: .subtitle)
-                if !subtitleFields.isEmpty {
-                    HStack(spacing: 6) {
-                        ForEach(subtitleFields) { field in
-                            fieldView(field)
-                        }
-                    }
+                // 等待输入时：单独一行突出显示等待时长
+                if session.status == .waitingInput {
+                    Text("等待 \(session.statusDurationText.isEmpty ? "刚刚" : session.statusDurationText)")
+                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.orange)
+                }
+
+                if let prompt = session.lastPrompt, !prompt.isEmpty {
+                    let truncated = prompt.count > 40 ? String(prompt.prefix(40)) + "…" : prompt
+                    Text(truncated)
+                        .font(.system(size: 11))
+                        .foregroundStyle(session.status == .idle ? .quaternary : .tertiary)
+                        .lineLimit(1)
                 }
             }
 
             Spacer()
 
-            // Right side
-            VStack(alignment: .trailing, spacing: 2) {
-                HStack(spacing: 4) {
-                    ForEach(settings.fields(in: .topRight)) { field in
-                        fieldView(field)
+            // 右侧：总时长 + 统计（降低视觉权重）
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(session.durationText)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(session.status == .idle ? .quaternary : .tertiary)
+
+                HStack(spacing: 6) {
+                    if session.turnCount > 0 {
+                        Text("\(session.turnCount) 轮")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.quaternary)
                     }
-                }
-                let brFields = settings.fields(in: .bottomRight)
-                if !brFields.isEmpty {
-                    HStack(spacing: 6) {
-                        ForEach(brFields) { field in
-                            fieldView(field)
-                        }
+                    if !session.tokenText.isEmpty {
+                        Text(session.tokenText)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.quaternary)
                     }
                 }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
         .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color.white.opacity(isHovered ? 0.08 : 0.0))
+            RoundedRectangle(cornerRadius: 8)
+                .fill(statusBackgroundColor)
         )
+        // 左侧彩色边条（加粗到 4px）
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(statusAccentColor)
+                .frame(width: 4)
+                .padding(.vertical, 4)
+        }
         .scaleEffect(isPressed ? 0.97 : 1.0)
         .animation(.easeInOut(duration: 0.3), value: session.status)
         .animation(.easeOut(duration: 0.15), value: isPressed)
@@ -220,53 +228,91 @@ struct SessionRowView: View {
         .help(session.cwd)
     }
 
-    @ViewBuilder
-    private func fieldView(_ field: DisplayField) -> some View {
-        switch field {
-        case .statusDot:
-            StatusDot(status: session.status)
-        case .agentIcon:
-            Image(systemName: session.agentType.icon)
-                .font(.system(size: 10))
-                .foregroundStyle(agentColor(session.agentType))
-                .help(session.agentType.rawValue)
-        case .statusText:
-            Text(session.status.rawValue).font(.system(size: 10)).foregroundStyle(.secondary)
-        case .lastPrompt:
-            if let prompt = session.lastPrompt, !prompt.isEmpty {
-                let truncated = prompt.count > 30 ? String(prompt.prefix(30)) + "…" : prompt
-                Text(truncated).font(.system(size: 10)).foregroundStyle(.tertiary).lineLimit(1)
-            }
-        case .duration:
-            Text(session.durationText).font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary)
-        case .turnCount:
-            if session.turnCount > 0 {
-                Label("\(session.turnCount)", systemImage: "bubble.left.and.bubble.right").font(.system(size: 9)).foregroundStyle(.tertiary)
-            }
-        case .tokenUsage:
-            if !session.tokenText.isEmpty {
-                Label(session.tokenText, systemImage: "gauge.low").font(.system(size: 9)).foregroundStyle(.tertiary)
-            }
-        case .model:
-            if !session.modelShort.isEmpty {
-                Text(session.modelShort).font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
-            }
-        case .gitBranch:
-            if let branch = session.gitBranch, !branch.isEmpty {
-                Label(branch, systemImage: "arrow.triangle.branch").font(.system(size: 9)).foregroundStyle(.tertiary)
-            }
-        case .cwdPath:
-            Text(session.cwd).font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(1)
-        case .pid:
-            Text("PID:\(session.pid)").font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
+    private var titleColor: Color {
+        switch session.status {
+        case .waitingInput: return .primary
+        case .working: return .primary
+        case .idle: return .secondary
+        case .unknown: return .secondary
         }
     }
 
-    private func agentColor(_ type: AgentType) -> Color {
-        switch type {
-        case .claude: return .orange
-        case .codex: return .green
-        case .gemini: return .blue
+    private var statusAccentColor: Color {
+        switch session.status {
+        case .working: return .blue
+        case .waitingInput: return .orange
+        case .idle: return .green
+        case .unknown: return .gray.opacity(0.3)
+        }
+    }
+
+    private var statusBackgroundColor: Color {
+        switch session.status {
+        case .working: return isHovered ? .blue.opacity(0.1) : .blue.opacity(0.05)
+        case .waitingInput: return isHovered ? .orange.opacity(0.15) : .orange.opacity(0.1)
+        case .idle: return isHovered ? .white.opacity(0.05) : .white.opacity(0.02)
+        case .unknown: return isHovered ? .white.opacity(0.05) : .clear
+        }
+    }
+}
+
+// MARK: - 状态 Badge
+
+struct StatusBadge: View {
+    let session: Session
+
+    var body: some View {
+        HStack(spacing: 3) {
+            if session.status == .waitingInput {
+                Text("⚠")
+                    .font(.system(size: 10))
+            }
+            if session.status == .idle {
+                Text("✓")
+                    .font(.system(size: 10))
+            }
+            Text(badgeText)
+                .font(.system(size: 11, weight: badgeWeight))
+        }
+        .foregroundStyle(badgeTextColor)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(badgeBackground)
+        .cornerRadius(4)
+    }
+
+    private var badgeText: String {
+        let statusLabel = session.status.rawValue
+        let duration = session.statusDurationText
+        if duration.isEmpty { return statusLabel }
+
+        switch session.status {
+        case .working: return "\(statusLabel) \(duration)"
+        case .waitingInput: return statusLabel
+        case .idle: return "\(duration) 前完成"
+        case .unknown: return statusLabel
+        }
+    }
+
+    private var badgeWeight: Font.Weight {
+        session.status == .waitingInput ? .bold : .regular
+    }
+
+    private var badgeBackground: Color {
+        switch session.status {
+        case .working: return .blue.opacity(0.2)
+        case .waitingInput: return .orange          // 实底
+        case .idle: return .green.opacity(0.1)
+        case .unknown: return .gray.opacity(0.1)
+        }
+    }
+
+    private var badgeTextColor: Color {
+        switch session.status {
+        case .working: return .blue
+        case .waitingInput: return .black           // 实底上用黑字
+        case .idle: return .green.opacity(0.7)
+        case .unknown: return .gray
         }
     }
 }
@@ -284,12 +330,12 @@ struct StatusBarView: View {
 
         HStack(spacing: 0) {
             Text(summaryText(total: total, working: workingCount, waiting: waitingCount))
-                .font(.system(size: 10))
+                .font(.system(size: 12))
                 .foregroundStyle(.secondary)
             Spacer()
             if totalTokens > 0 {
                 Text(formatTokens(totalTokens))
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(.tertiary)
             }
         }

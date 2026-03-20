@@ -50,6 +50,19 @@ struct Session: Identifiable {
     var model: String?
     var gitBranch: String?
     var version: String?
+    var statusChangedAt: Date?
+
+    /// 距上次状态变化的时间文字，如 "3m"、"1h20m"
+    var statusDurationText: String {
+        guard let changedAt = statusChangedAt else { return "" }
+        let seconds = Int(Date().timeIntervalSince(changedAt))
+        if seconds < 60 { return "\(seconds)s" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes)m" }
+        let hours = minutes / 60
+        let remainMinutes = minutes % 60
+        return remainMinutes > 0 ? "\(hours)h\(remainMinutes)m" : "\(hours)h"
+    }
 
     var projectName: String {
         (cwd as NSString).lastPathComponent
