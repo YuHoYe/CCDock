@@ -11,21 +11,83 @@ class TerminalActivator {
             return
         }
 
-        // 优先尝试 tmux 切换（适用于 tmux 环境）
+        // 优先尝试 tmux 切换
         if activateViaTmux(tty: tty, projectName: session.projectName) {
             return
         }
 
-        // 回退：尝试通过 AppleScript 匹配终端窗口
-        activateViaAppleScript(session: session)
+        // 找到拥有这个 session PID 的终端应用，只激活它
+        let ownerApp = findTerminalOwner(pid: session.pid)
+        print("[TerminalActivator] 终端应用: \(ownerApp ?? "未知"), TTY: \(tty)")
+
+        switch ownerApp {
+        case "com.apple.Terminal":
+            if tryTerminalApp(tty: tty) { return }
+        case "com.googlecode.iterm2":
+            if tryITerm2(tty: tty) { return }
+        default:
+            break
+        }
+
+        // Ghostty / Warp / kitty 等：直接激活对应终端应用
+        if let app = ownerApp {
+            activateAppByBundleId(app)
+        } else {
+            activateFallback()
+        }
     }
 
-    // MARK: - tmux 方式（最可靠）
+    // MARK: - 查找 PID 所属终端应用
+
+    /// 沿进程树向上找到终端应用的 bundle ID
+    private func findTerminalOwner(pid: Int) -> String? {
+        var currentPid = pid
+        let terminalBundleIds: Set<String> = [
+            "com.mitchellh.ghostty",
+            "com.apple.Terminal",
+            "com.googlecode.iterm2",
+            "dev.warp.Warp-Stable",
+            "net.kovidgoyal.kitty",
+            "io.alacritty",
+        ]
+
+        let runningApps = NSWorkspace.shared.runningApplications
+        let bundleIdByPid = Dictionary(
+            uniqueKeysWithValues: runningApps.compactMap { app in
+                app.bundleIdentifier.map { (app.processIdentifier, $0) }
+            }
+        )
+
+        // 向上遍历进程树（最多 20 层防死循环）
+        for _ in 0..<20 {
+            if currentPid <= 1 { break }
+
+            if let bundleId = bundleIdByPid[Int32(currentPid)],
+               terminalBundleIds.contains(bundleId) {
+                return bundleId
+            }
+
+            // 获取父进程 PID
+            guard let ppid = getParentPid(currentPid) else { break }
+            if ppid == currentPid { break }
+            currentPid = ppid
+        }
+
+        return nil
+    }
+
+    private func getParentPid(_ pid: Int) -> Int? {
+        guard let output = runProcess("/bin/ps", args: ["-o", "ppid=", "-p", "\(pid)"]) else {
+            return nil
+        }
+        return Int(output.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    // MARK: - tmux 方式
 
     private func activateViaTmux(tty: String, projectName: String) -> Bool {
         let fullTty = tty.hasPrefix("/dev/") ? tty : "/dev/\(tty)"
 
-        // 查询 tmux 所有 pane，找到匹配 tty 的那个
         guard let tmuxOutput = runProcess("/usr/bin/env", args: [
             "tmux", "list-panes", "-a",
             "-F", "#{session_name}:#{window_index}.#{pane_index} #{pane_tty}"
@@ -33,7 +95,6 @@ class TerminalActivator {
             return false
         }
 
-        // 解析 tmux 输出，匹配 TTY
         for line in tmuxOutput.split(separator: "\n") {
             let parts = line.split(separator: " ", maxSplits: 1)
             guard parts.count == 2 else { continue }
@@ -41,9 +102,7 @@ class TerminalActivator {
             let paneTty = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
 
             if paneTty == fullTty {
-                // 切换到目标 window
                 let _ = runProcess("/usr/bin/env", args: ["tmux", "select-window", "-t", target])
-                // 激活终端应用到前台
                 activateTerminalApp()
                 print("[TerminalActivator] ✅ tmux 切换到 \(projectName) (\(target))")
                 return true
@@ -53,30 +112,17 @@ class TerminalActivator {
         return false
     }
 
-    // MARK: - AppleScript 方式（回退）
-
-    private func activateViaAppleScript(session: Session) {
-        let tty = session.tty ?? ""
-
-        // 尝试 Terminal.app
-        if tryTerminalApp(tty: tty) { return }
-
-        // 尝试 iTerm2
-        if tryITerm2(tty: tty) { return }
-
-        // 最终回退：激活任何终端
-        activateFallback()
-    }
+    // MARK: - AppleScript 方式
 
     private func tryTerminalApp(tty: String) -> Bool {
-        guard isAppRunning("Terminal") else { return false }
+        // 先匹配，确认找到后再 activate
         let script = """
             tell application "Terminal"
-                activate
                 set targetTTY to "/dev/\(tty)"
                 repeat with w in windows
                     repeat with t in tabs of w
                         if tty of t is targetTTY then
+                            activate
                             set selected of t to true
                             set index of w to 1
                             return true
@@ -90,14 +136,13 @@ class TerminalActivator {
     }
 
     private func tryITerm2(tty: String) -> Bool {
-        guard isAppRunning("iTerm2") else { return false }
         let script = """
             tell application "iTerm2"
-                activate
                 repeat with w in windows
                     repeat with t in tabs of w
                         repeat with s in sessions of t
                             if tty of s contains "\(tty)" then
+                                activate
                                 select t
                                 select s
                                 return true
@@ -113,8 +158,14 @@ class TerminalActivator {
 
     // MARK: - 通用终端激活
 
+    private func activateAppByBundleId(_ bundleId: String) {
+        if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleId }) {
+            app.activate()
+            print("[TerminalActivator] ✅ 激活 \(bundleId)")
+        }
+    }
+
     private func activateTerminalApp() {
-        // 按优先级尝试激活终端应用
         let terminalApps = ["ghostty", "iTerm2", "Terminal", "Warp", "kitty", "Alacritty"]
         for app in terminalApps {
             if isAppRunning(app) {

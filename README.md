@@ -62,7 +62,7 @@ CCDock 通过监听各 Agent 在本地创建的会话文件来发现和追踪会
 
 | Agent | 会话数据 | 状态检测方式 |
 |-------|---------|-------------|
-| Claude Code | `~/.claude/sessions/` + `ccnotify.db` | SQLite 轮询 + JSONL 解析 |
+| Claude Code | `~/.claude/sessions/` + `~/.claude/projects/` | JSONL 日志解析 |
 | Codex | `~/.codex/sessions/` | JSONL 事件流解析 |
 | Gemini CLI | `~/.gemini/tmp/` | `logs.json` 修改时间检测 |
 

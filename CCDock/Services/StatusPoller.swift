@@ -1,16 +1,15 @@
 import Foundation
-import SQLite3
 import UserNotifications
 
-/// 轮询 ccnotify.db 获取会话状态，解析 jsonl 获取 token 用量
+/// 通过 Claude Code 的 jsonl 日志推断会话状态
 class StatusPoller {
     private let store: SessionStore
-    private let dbPath: String
     private let projectsDir: String
     private var timer: Timer?
     private var tokenTimer: Timer?
 
-    private let idleThreshold: TimeInterval = 30
+    /// jsonl 超过这个时间没更新就认为是 idle
+    private let staleThreshold: TimeInterval = 30
 
     // 跟踪上次状态，用于触发通知
     private var previousStatuses: [String: SessionStatus] = [:]
@@ -18,14 +17,12 @@ class StatusPoller {
     init(store: SessionStore) {
         self.store = store
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        self.dbPath = "\(home)/.claude/plugins/cache/netease-claude-code-plugin-market/notifier/1.0.0/scripts/ccnotify/ccnotify.db"
         self.projectsDir = "\(home)/.claude/projects"
         requestNotificationPermission()
     }
 
     func start() {
         poll()
-        pollTokens()
         timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.poll()
         }
@@ -45,94 +42,157 @@ class StatusPoller {
     // MARK: - 状态轮询
 
     private func poll() {
-        let sessionIds = store.activeSessionIds()
-        guard !sessionIds.isEmpty else { return }
+        let claudeSessions = store.sessions.filter { $0.agentType == .claude }
+        for session in claudeSessions {
+            let status = inferStatus(sessionId: session.id, cwd: session.cwd)
+            let prompt = readLastPrompt(sessionId: session.id, cwd: session.cwd)
 
-        var db: OpaquePointer?
-        guard sqlite3_open_v2(dbPath, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { return }
-        defer { sqlite3_close(db) }
+            // 状态变化通知
+            let prevStatus = previousStatuses[session.id]
+            if let prev = prevStatus, prev != status {
+                sendStatusChangeNotification(projectName: session.projectName, from: prev, to: status)
+            }
+            previousStatuses[session.id] = status
 
-        for sessionId in sessionIds {
-            pollSessionStatus(db: db, sessionId: sessionId)
-            pollSessionTurnCount(db: db, sessionId: sessionId)
+            store.updateStatus(sessionId: session.id, status: status)
+            if let prompt = prompt {
+                store.updatePrompt(sessionId: session.id, prompt: prompt)
+            }
         }
     }
 
-    private func pollSessionStatus(db: OpaquePointer?, sessionId: String) {
-        let sql = """
-            SELECT prompt, stoped_at, lastWaitUserAt
-            FROM prompt WHERE session_id = ? ORDER BY created_at DESC LIMIT 1
-        """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-        defer { sqlite3_finalize(stmt) }
+    // MARK: - 状态推断（纯 jsonl）
 
-        sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+    private func inferStatus(sessionId: String, cwd: String) -> SessionStatus {
+        let logPath = jsonlPath(sessionId: sessionId, cwd: cwd)
 
-        guard sqlite3_step(stmt) == SQLITE_ROW else {
-            store.updateStatus(sessionId: sessionId, status: .unknown)
-            return
+        // 检查文件修改时间
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: logPath),
+              let modDate = attrs[.modificationDate] as? Date else {
+            return .unknown
         }
 
-        let prompt = sqlite3_column_text(stmt, 0).map { String(cString: $0) }
-        let stoppedAt = sqlite3_column_text(stmt, 1)
-        let lastWaitUserAt = sqlite3_column_text(stmt, 2)
+        let timeSinceUpdate = Date().timeIntervalSince(modDate)
 
-        let status: SessionStatus
-        if let stopAt = stoppedAt {
-            let stopStr = String(cString: stopAt)
-            if let waitAt = lastWaitUserAt, String(cString: waitAt) > stopStr {
-                status = .waitingInput
-            } else {
-                status = .idle
+        // 读最后几行判断最终状态
+        let lastEntry = readLastEntry(path: logPath)
+
+        switch lastEntry {
+        case .userMessage:
+            // 用户刚提交 prompt，一定在工作中
+            return .working
+
+        case .assistantStreaming:
+            // assistant 消息还没 end_turn，正在流式输出
+            return .working
+
+        case .assistantDone:
+            if timeSinceUpdate < staleThreshold {
+                // 刚完成，可能马上会有新的 user 消息
+                return .idle
             }
-        } else {
-            let session = store.sessions.first { $0.id == sessionId }
-            if let cwd = session?.cwd, isSessionLogStale(sessionId: sessionId, cwd: cwd) {
-                status = .idle
-            } else {
-                status = .working
-            }
-        }
+            return .idle
 
-        // 状态变化通知
-        let prevStatus = previousStatuses[sessionId]
-        if let prev = prevStatus, prev != status {
-            let session = store.sessions.first { $0.id == sessionId }
-            let projectName = session?.projectName ?? sessionId.prefix(8).description
-            sendStatusChangeNotification(projectName: projectName, from: prev, to: status)
-        }
-        previousStatuses[sessionId] = status
+        case .waitingInput:
+            return .waitingInput
 
-        store.updateStatus(sessionId: sessionId, status: status)
-        if let prompt = prompt {
-            store.updatePrompt(sessionId: sessionId, prompt: prompt)
+        case .unknown:
+            // 文件最近有更新 → 工作中；否则 → 未知
+            return timeSinceUpdate < staleThreshold ? .working : .unknown
         }
     }
 
-    private func pollSessionTurnCount(db: OpaquePointer?, sessionId: String) {
-        let sql = "SELECT COUNT(*) FROM prompt WHERE session_id = ?"
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
-        if sqlite3_step(stmt) == SQLITE_ROW {
-            let count = Int(sqlite3_column_int(stmt, 0))
-            // 仅更新 turnCount，token 由 pollTokens 更新
-            if let index = store.sessions.firstIndex(where: { $0.id == sessionId }) {
-                store.sessions[index].turnCount = count
+    private enum LastEntryType {
+        case userMessage
+        case assistantStreaming  // assistant 消息但没有 end_turn
+        case assistantDone      // assistant 消息且 stop_reason == end_turn
+        case waitingInput
+        case unknown
+    }
+
+    /// 从 jsonl 末尾读取最后一个有意义的条目
+    private func readLastEntry(path: String) -> LastEntryType {
+        guard let data = FileManager.default.contents(atPath: path),
+              let content = String(data: data, encoding: .utf8) else {
+            return .unknown
+        }
+
+        // 从末尾往前扫描，找最后的 user/assistant/last-prompt 行
+        let lines = content.split(separator: "\n")
+        for line in lines.reversed() {
+            guard let lineData = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                  let type = obj["type"] as? String else {
+                continue
+            }
+
+            if type == "user" {
+                return .userMessage
+            }
+
+            if type == "assistant" {
+                if let message = obj["message"] as? [String: Any],
+                   let stopReason = message["stop_reason"] as? String,
+                   stopReason == "end_turn" {
+                    return .assistantDone
+                }
+                return .assistantStreaming
+            }
+
+            // Claude Code 在 assistant 回复后会写 last-prompt
+            if type == "last-prompt" {
+                return .assistantDone
+            }
+
+            // tool_result 等中间状态 → 继续往前看
+            if type == "progress" || type == "queue-operation" {
+                continue
             }
         }
+
+        return .unknown
+    }
+
+    // MARK: - Prompt 读取
+
+    private func readLastPrompt(sessionId: String, cwd: String) -> String? {
+        let logPath = jsonlPath(sessionId: sessionId, cwd: cwd)
+        guard let data = FileManager.default.contents(atPath: logPath),
+              let content = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+
+        // 找 last-prompt 或最后一条 user 消息
+        let lines = content.split(separator: "\n")
+        for line in lines.reversed() {
+            guard let lineData = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                  let type = obj["type"] as? String else {
+                continue
+            }
+
+            if type == "last-prompt", let prompt = obj["lastPrompt"] as? String {
+                return prompt
+            }
+
+            if type == "user",
+               let message = obj["message"] as? [String: Any],
+               let content = message["content"] as? String {
+                return content
+            }
+        }
+        return nil
     }
 
     // MARK: - Token 统计
 
     private func pollTokens() {
-        for session in store.sessions {
+        let claudeSessions = store.sessions.filter { $0.agentType == .claude }
+        for session in claudeSessions {
             let metrics = parseSessionLog(sessionId: session.id, cwd: session.cwd)
             store.updateMetrics(
                 sessionId: session.id,
-                turnCount: session.turnCount,
+                turnCount: metrics.turnCount,
                 totalTokens: metrics.tokens,
                 model: metrics.model,
                 gitBranch: metrics.gitBranch,
@@ -143,27 +203,32 @@ class StatusPoller {
 
     private struct SessionMetrics {
         var tokens: Int = 0
+        var turnCount: Int = 0
         var model: String?
         var gitBranch: String?
         var version: String?
     }
 
     private func parseSessionLog(sessionId: String, cwd: String) -> SessionMetrics {
-        let encodedCwd = cwd.replacingOccurrences(of: "/", with: "-")
-        let logPath = "\(projectsDir)/\(encodedCwd)/\(sessionId).jsonl"
+        let logPath = jsonlPath(sessionId: sessionId, cwd: cwd)
 
-        guard let handle = FileHandle(forReadingAtPath: logPath) else { return SessionMetrics() }
-        defer { handle.closeFile() }
-
-        let data = handle.readDataToEndOfFile()
-        guard let content = String(data: data, encoding: .utf8) else { return SessionMetrics() }
+        guard let data = FileManager.default.contents(atPath: logPath),
+              let content = String(data: data, encoding: .utf8) else {
+            return SessionMetrics()
+        }
 
         var metrics = SessionMetrics()
         for line in content.split(separator: "\n") {
             guard let lineData = line.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else { continue }
 
-            // 从任意消息提取 gitBranch 和 version
+            let type = obj["type"] as? String
+
+            // 统计 user 消息数作为轮数
+            if type == "user" {
+                metrics.turnCount += 1
+            }
+
             if metrics.gitBranch == nil, let branch = obj["gitBranch"] as? String, !branch.isEmpty {
                 metrics.gitBranch = branch
             }
@@ -171,8 +236,7 @@ class StatusPoller {
                 metrics.version = ver
             }
 
-            // 从 assistant 消息提取 token 和 model
-            guard obj["type"] as? String == "assistant",
+            guard type == "assistant",
                   let message = obj["message"] as? [String: Any] else { continue }
 
             if metrics.model == nil, let model = message["model"] as? String {
@@ -188,16 +252,11 @@ class StatusPoller {
         return metrics
     }
 
-    // MARK: - 日志文件检查
+    // MARK: - Helpers
 
-    private func isSessionLogStale(sessionId: String, cwd: String) -> Bool {
+    private func jsonlPath(sessionId: String, cwd: String) -> String {
         let encodedCwd = cwd.replacingOccurrences(of: "/", with: "-")
-        let logPath = "\(projectsDir)/\(encodedCwd)/\(sessionId).jsonl"
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: logPath),
-              let modDate = attrs[.modificationDate] as? Date else {
-            return true
-        }
-        return Date().timeIntervalSince(modDate) > idleThreshold
+        return "\(projectsDir)/\(encodedCwd)/\(sessionId).jsonl"
     }
 
     // MARK: - macOS 原生通知
