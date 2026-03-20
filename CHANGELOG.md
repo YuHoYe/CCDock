@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.0] - 2025-03-20
+
+### Changed
+
+- Remove ccnotify.db dependency — status detection now uses Claude Code's native jsonl logs
+- No third-party plugins required, works out of the box for all users
+
+### Fixed
+
+- App crash on other machines due to Bundle.module fatalError
+- Terminal.app launching unexpectedly when using Ghostty
+- TerminalActivator now finds the correct terminal app via process tree
+
 ## [1.1.0] - 2025-03-20
 
 ### Added
@@ -31,5 +44,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Homebrew Cask installation support
 - Code signed and notarized for macOS Gatekeeper
 
+[1.2.0]: https://github.com/YuHoYe/CCDock/releases/tag/v1.2.0
 [1.1.0]: https://github.com/YuHoYe/CCDock/releases/tag/v1.1.0
 [1.0.0]: https://github.com/YuHoYe/CCDock/releases/tag/v1.0.0
