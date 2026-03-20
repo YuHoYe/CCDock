@@ -7,6 +7,7 @@ class GeminiDiscovery {
     private let store: SessionStore
     private let tmpDir: String
     private var timer: Timer?
+    private var cwdCache: [String: String] = [:]
 
     private let activeThreshold: TimeInterval = 60
 
@@ -63,7 +64,8 @@ class GeminiDiscovery {
 
         // 从日志中提取 cwd（Gemini 没有直接记录，用当前工作目录或空字符串）
         // 尝试从消息内容推断，否则使用 ~ 作为默认
-        let cwd = extractCwd(from: logs) ?? "~"
+        let cwd = cwdCache[dir] ?? extractCwd(from: logs) ?? "~"
+        cwdCache[dir] = cwd
 
         // 提取开始时间
         let startedAt: Date

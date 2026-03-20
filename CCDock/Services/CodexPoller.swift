@@ -6,6 +6,7 @@ class CodexPoller {
     private let store: SessionStore
     private let sessionsDir: String
     private var timer: Timer?
+    private var lastFileSize: [String: UInt64] = [:]
 
     init(store: SessionStore) {
         self.store = store
@@ -26,9 +27,15 @@ class CodexPoller {
     }
 
     private func poll() {
-        let codexSessions = store.sessions.filter { $0.agentType == .codex }
-        for session in codexSessions {
-            let metrics = parseCodexLog(sessionId: session.id)
+        for session in store.sessions where session.agentType == .codex {
+            // 文件大小未变则跳过
+            guard let path = findSessionFile(sessionId: session.id) else { continue }
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+                  let fileSize = attrs[.size] as? UInt64 else { continue }
+            if lastFileSize[session.id] == fileSize { continue }
+            lastFileSize[session.id] = fileSize
+
+            let metrics = parseCodexLog(path: path)
             if let status = metrics.status {
                 store.updateStatus(sessionId: session.id, status: status)
             }
@@ -55,9 +62,7 @@ class CodexPoller {
         var version: String?
     }
 
-    private func parseCodexLog(sessionId: String) -> CodexMetrics {
-        // 在 sessions 目录中搜索匹配的 jsonl 文件
-        guard let path = findSessionFile(sessionId: sessionId) else { return CodexMetrics() }
+    private func parseCodexLog(path: String) -> CodexMetrics {
         guard let handle = FileHandle(forReadingAtPath: path) else { return CodexMetrics() }
         defer { handle.closeFile() }
 

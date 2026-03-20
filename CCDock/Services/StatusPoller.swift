@@ -17,6 +17,12 @@ class StatusPoller {
     // 跟踪上次状态，用于触发通知
     private var previousStatuses: [String: SessionStatus] = [:]
 
+    // metrics 缓存：文件大小未变则跳过重新解析
+    private var lastMetricsFileSize: [String: UInt64] = [:]
+
+    // jsonl 路径缓存：避免每次 poll 都做目录遍历
+    private var resolvedPaths: [String: (path: String, resolvedAt: Date)] = [:]
+
     init(store: SessionStore) {
         self.store = store
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -45,12 +51,21 @@ class StatusPoller {
     // MARK: - 状态轮询
 
     private func poll() {
-        let claudeSessions = store.sessions.filter { $0.agentType == .claude }
-        for session in claudeSessions {
-            let status = inferStatus(sessionId: session.id, cwd: session.cwd)
-            let prompt = readLastPrompt(sessionId: session.id, cwd: session.cwd)
+        for session in store.sessions where session.agentType == .claude {
+            let logPath = jsonlPath(sessionId: session.id, cwd: session.cwd)
 
-            // 状态变化通知
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: logPath),
+                  let modDate = attrs[.modificationDate] as? Date else {
+                store.updateStatus(sessionId: session.id, status: .unknown)
+                continue
+            }
+
+            let timeSinceUpdate = Date().timeIntervalSince(modDate)
+            let tail = readTail(path: logPath, bytes: 32_768)
+
+            let status = StatusPoller.inferStatus(from: tail, timeSinceUpdate: timeSinceUpdate, staleThreshold: staleThreshold)
+            let prompt = StatusPoller.parseLastPrompt(from: tail)
+
             let prevStatus = previousStatuses[session.id]
             if let prev = prevStatus, prev != status {
                 sendStatusChangeNotification(projectName: session.projectName, from: prev, to: status)
@@ -64,39 +79,16 @@ class StatusPoller {
         }
     }
 
-    // MARK: - 状态推断（纯 jsonl）
-
-    private func inferStatus(sessionId: String, cwd: String) -> SessionStatus {
-        let logPath = jsonlPath(sessionId: sessionId, cwd: cwd)
-
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: logPath),
-              let modDate = attrs[.modificationDate] as? Date else {
-            return .unknown
-        }
-
-        let timeSinceUpdate = Date().timeIntervalSince(modDate)
-
-        guard let data = FileManager.default.contents(atPath: logPath),
-              let content = String(data: data, encoding: .utf8) else {
-            return .unknown
-        }
-
-        return StatusPoller.inferStatus(from: content, timeSinceUpdate: timeSinceUpdate, staleThreshold: staleThreshold)
-    }
-
-    private func readLastPrompt(sessionId: String, cwd: String) -> String? {
-        let logPath = jsonlPath(sessionId: sessionId, cwd: cwd)
-        guard let data = FileManager.default.contents(atPath: logPath),
-              let content = String(data: data, encoding: .utf8) else {
-            return nil
-        }
-        return StatusPoller.parseLastPrompt(from: content)
-    }
-
     private func pollTokens() {
-        let claudeSessions = store.sessions.filter { $0.agentType == .claude }
-        for session in claudeSessions {
+        for session in store.sessions where session.agentType == .claude {
             let logPath = jsonlPath(sessionId: session.id, cwd: session.cwd)
+
+            // 文件大小未变则跳过，避免重复全量解析
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: logPath),
+                  let fileSize = attrs[.size] as? UInt64 else { continue }
+            if lastMetricsFileSize[session.id] == fileSize { continue }
+            lastMetricsFileSize[session.id] = fileSize
+
             guard let data = FileManager.default.contents(atPath: logPath),
                   let content = String(data: data, encoding: .utf8) else { continue }
             let metrics = StatusPoller.parseMetrics(from: content)
@@ -109,6 +101,72 @@ class StatusPoller {
                 version: metrics.version
             )
         }
+    }
+
+    // MARK: - Helpers
+
+    /// 只读文件末尾，避免全量加载大型 jsonl
+    private func readTail(path: String, bytes: Int) -> String {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return "" }
+        defer { handle.closeFile() }
+        let size = handle.seekToEndOfFile()
+        let offset = size > UInt64(bytes) ? size - UInt64(bytes) : 0
+        handle.seek(toFileOffset: offset)
+        var data = handle.readDataToEndOfFile()
+        // 截断可能切断 UTF-8 多字节序列，跳过开头不完整的字节
+        if offset > 0 {
+            while !data.isEmpty, String(data: data.prefix(1), encoding: .utf8) == nil {
+                data = data.dropFirst()
+            }
+        }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    private func jsonlPath(sessionId: String, cwd: String) -> String {
+        let cacheKey = "\(sessionId):\(cwd)"
+
+        // 缓存有效期 10 秒，避免每 2 秒都做目录遍历
+        if let cached = resolvedPaths[cacheKey],
+           Date().timeIntervalSince(cached.resolvedAt) < 10 {
+            return cached.path
+        }
+
+        let encodedCwd = cwd.replacingOccurrences(of: "/", with: "-")
+        let exactPath = "\(projectsDir)/\(encodedCwd)/\(sessionId).jsonl"
+        let projectDir = "\(projectsDir)/\(encodedCwd)"
+
+        // 精确匹配的 jsonl 最近有更新，直接用
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: exactPath),
+           let modDate = attrs[.modificationDate] as? Date,
+           Date().timeIntervalSince(modDate) < staleThreshold {
+            resolvedPaths[cacheKey] = (exactPath, Date())
+            return exactPath
+        }
+
+        // Claude Code 可能在同一 PID 下切换了 sessionId，找同目录最新的 jsonl
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: projectDir) else {
+            resolvedPaths[cacheKey] = (exactPath, Date())
+            return exactPath
+        }
+        let newest = files
+            .filter { $0.hasSuffix(".jsonl") }
+            .compactMap { name -> (String, Date)? in
+                let path = "\(projectDir)/\(name)"
+                guard let a = try? FileManager.default.attributesOfItem(atPath: path),
+                      let mod = a[.modificationDate] as? Date else { return nil }
+                return (path, mod)
+            }
+            .max(by: { $0.1 < $1.1 })
+
+        let result: String
+        if let newest = newest,
+           Date().timeIntervalSince(newest.1) < staleThreshold {
+            result = newest.0
+        } else {
+            result = exactPath
+        }
+        resolvedPaths[cacheKey] = (result, Date())
+        return result
     }
 
     // MARK: - 纯函数（可测试）
@@ -224,13 +282,6 @@ class StatusPoller {
             }
         }
         return metrics
-    }
-
-    // MARK: - Helpers
-
-    private func jsonlPath(sessionId: String, cwd: String) -> String {
-        let encodedCwd = cwd.replacingOccurrences(of: "/", with: "-")
-        return "\(projectsDir)/\(encodedCwd)/\(sessionId).jsonl"
     }
 
     // MARK: - macOS 原生通知

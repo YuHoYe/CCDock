@@ -104,13 +104,22 @@ struct StatusDot: View {
     @State private var isPulsing = false
 
     var body: some View {
-        Circle()
-            .fill(statusColor)
-            .frame(width: 8, height: 8)
-            .opacity(dotOpacity)
-            .animation(dotAnimation, value: isPulsing)
-            .onAppear { isPulsing = true }
-            .onChange(of: status) { isPulsing = true }
+        ZStack {
+            // 等待输入时：外圈呼吸光晕
+            if status == .waitingInput {
+                Circle()
+                    .fill(Color.orange.opacity(0.3))
+                    .frame(width: isPulsing ? 16 : 8, height: isPulsing ? 16 : 8)
+                    .opacity(isPulsing ? 0 : 0.6)
+            }
+            Circle()
+                .fill(statusColor)
+                .frame(width: 8, height: 8)
+                .opacity(dotOpacity)
+        }
+        .animation(dotAnimation, value: isPulsing)
+        .onAppear { isPulsing = true }
+        .onChange(of: status) { isPulsing = true }
     }
 
     private var statusColor: Color {
@@ -125,7 +134,7 @@ struct StatusDot: View {
     private var dotOpacity: Double {
         switch status {
         case .working: return isPulsing ? 1.0 : 0.4
-        case .waitingInput: return isPulsing ? 1.0 : 0.2
+        case .waitingInput: return 1.0
         default: return 1.0
         }
     }
@@ -135,7 +144,7 @@ struct StatusDot: View {
         case .working:
             return .easeInOut(duration: 1.2).repeatForever(autoreverses: true)
         case .waitingInput:
-            return .easeInOut(duration: 0.6).repeatForever(autoreverses: true)
+            return .easeInOut(duration: 1.0).repeatForever(autoreverses: true)
         default: return nil
         }
     }
@@ -149,6 +158,7 @@ struct SessionRowView: View {
 
     @State private var isHovered = false
     @State private var isPressed = false
+    @State private var barPulsing = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -165,8 +175,10 @@ struct SessionRowView: View {
                 // 等待输入时：单独一行突出显示等待时长
                 if session.status == .waitingInput {
                     Text("等待 \(session.statusDurationText.isEmpty ? "刚刚" : session.statusDurationText)")
-                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
                         .foregroundStyle(.orange)
+                        .opacity(barPulsing ? 1.0 : 0.5)
+                        .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: barPulsing)
                 }
 
                 if let prompt = session.lastPrompt, !prompt.isEmpty {
@@ -206,13 +218,21 @@ struct SessionRowView: View {
             RoundedRectangle(cornerRadius: 8)
                 .fill(statusBackgroundColor)
         )
-        // 左侧彩色边条（加粗到 4px）
+        // 左侧彩色边条
         .overlay(alignment: .leading) {
             RoundedRectangle(cornerRadius: 2)
                 .fill(statusAccentColor)
-                .frame(width: 4)
+                .frame(width: session.status == .waitingInput ? 5 : 4)
+                .opacity(session.status == .waitingInput ? (barPulsing ? 1.0 : 0.4) : 1.0)
                 .padding(.vertical, 4)
+                .animation(
+                    session.status == .waitingInput
+                        ? .easeInOut(duration: 1.0).repeatForever(autoreverses: true)
+                        : nil,
+                    value: barPulsing
+                )
         }
+        .onAppear { barPulsing = true }
         .scaleEffect(isPressed ? 0.97 : 1.0)
         .animation(.easeInOut(duration: 0.3), value: session.status)
         .animation(.easeOut(duration: 0.15), value: isPressed)
