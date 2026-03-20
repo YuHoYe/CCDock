@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct WelcomeView: View {
-    let onDismiss: () -> Void
+    let onStart: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -64,7 +64,7 @@ struct WelcomeView: View {
 
             Spacer().frame(height: 28)
 
-            Button(action: onDismiss) {
+            Button(action: onStart) {
                 Text("开始使用")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.white)

@@ -43,7 +43,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setupAppIcon() {
-        if let iconURL = Bundle.module.url(forResource: "AppIcon", withExtension: "icns"),
+        // Bundle.main.resourceURL → CCDock.app/Contents/Resources/
+        if let iconURL = Bundle.main.resourceURL?.appendingPathComponent("AppIcon.icns"),
            let icon = NSImage(contentsOf: iconURL) {
             NSApp.applicationIconImage = icon
         }
@@ -179,6 +180,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.contentView = NSHostingView(
             rootView: WelcomeView {
                 window.close()
+                self.isPinned = true
             }
         )
 
