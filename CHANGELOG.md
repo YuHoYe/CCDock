@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.0] - 2026-03-20
+
+### Added
+
+- Panel height auto-adapts to session count — expands/shrinks as sessions change, scrolls when exceeding 70% screen height
+- `--demo` mode with mock data for screenshots and previews
+- README now includes a panel screenshot showcasing all session states
+
+### Fixed
+
+- First click on panel from another window now works immediately (no longer requires two clicks)
+- Session status incorrectly showing "working" after `/compact` or context continuation — local commands and system messages are now properly skipped during status inference
+
 ## [1.3.0] - 2025-03-20
 
 ### Added
