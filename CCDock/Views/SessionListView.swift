@@ -13,7 +13,7 @@ struct PopoverContentView: View {
             Divider().opacity(0.3)
             StatusBarView(sessions: delegate.store.sessions)
         }
-        .frame(width: 380)
+        .frame(minWidth: 320, idealWidth: 380, maxHeight: 520)
         .focusEffectDisabled()
     }
 }
@@ -376,7 +376,7 @@ struct SessionListView: View {
             .frame(maxWidth: .infinity, minHeight: 80)
         } else {
             ScrollView {
-                LazyVStack(spacing: 1) {
+                VStack(spacing: 1) {
                     ForEach(store.sessions) { session in
                         SessionRowView(session: session) {
                             activator.activate(session: session)

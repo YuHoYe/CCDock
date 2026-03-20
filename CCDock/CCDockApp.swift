@@ -64,22 +64,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupPopover() {
         let popover = NSPopover()
-        popover.contentSize = NSSize(width: 320, height: 380)
         popover.behavior = .transient // 点击外部自动关闭
         popover.animates = true
-        popover.contentViewController = NSHostingController(
+        let hostingController = NSHostingController(
             rootView: PopoverContentView(delegate: self)
         )
+        // 让 popover 高度跟随内容自适应
+        hostingController.sizingOptions = .preferredContentSize
+        popover.contentViewController = hostingController
         self.popover = popover
     }
 
     // MARK: - Floating Panel (Pin 模式)
 
     private func setupPanel() {
-        let contentView = NSHostingView(
-            rootView: PinnedContentView(delegate: self)
-        )
-        panel = FloatingPanel(contentView: contentView)
+        panel = FloatingPanel(rootView: PinnedContentView(delegate: self))
     }
 
     // MARK: - Actions

@@ -11,6 +11,9 @@ class StatusPoller {
     /// jsonl 超过这个时间没更新就认为是 idle
     private let staleThreshold: TimeInterval = 30
 
+    /// 中间状态类型，解析 jsonl 时跳过
+    private static let skipTypes: Set<String> = ["progress", "queue-operation", "system", "file-history-snapshot"]
+
     // 跟踪上次状态，用于触发通知
     private var previousStatuses: [String: SessionStatus] = [:]
 
@@ -141,8 +144,7 @@ class StatusPoller {
 
             if type == "last-prompt" { return .assistantDone }
 
-            // progress / queue-operation 等中间状态，继续往前找
-            if type == "progress" || type == "queue-operation" { continue }
+            if Self.skipTypes.contains(type) { continue }
         }
         return .unknown
     }

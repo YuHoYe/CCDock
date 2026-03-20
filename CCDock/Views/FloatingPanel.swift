@@ -1,36 +1,30 @@
 import AppKit
 import SwiftUI
 
-/// 毛玻璃无标题栏悬浮面板
+/// 毛玻璃无标题栏悬浮面板，高度跟随内容自适应
 class FloatingPanel: NSPanel {
-    init(contentView: NSView) {
+    private var sizeObservation: NSKeyValueObservation?
+    private let hostingView: NSHostingView<AnyView>
+
+    init<Content: View>(rootView: Content) {
+        let hosting = NSHostingView(
+            rootView: AnyView(
+                rootView.background(
+                    VisualEffectBackground(material: .hudWindow, blendingMode: .behindWindow)
+                )
+            )
+        )
+        self.hostingView = hosting
+
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 340),
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
             styleMask: [.nonactivatingPanel, .fullSizeContentView, .borderless, .resizable],
             backing: .buffered,
             defer: false
         )
 
-        // 毛玻璃背景
-        let visualEffect = NSVisualEffectView()
-        visualEffect.material = .hudWindow
-        visualEffect.blendingMode = .behindWindow
-        visualEffect.state = .active
-        visualEffect.wantsLayer = true
-        visualEffect.layer?.cornerRadius = 12
-        visualEffect.layer?.masksToBounds = true
+        self.contentView = hosting
 
-        // 把 SwiftUI 内容放在毛玻璃上
-        contentView.translatesAutoresizingMaskIntoConstraints = false
-        visualEffect.addSubview(contentView)
-        NSLayoutConstraint.activate([
-            contentView.topAnchor.constraint(equalTo: visualEffect.topAnchor),
-            contentView.bottomAnchor.constraint(equalTo: visualEffect.bottomAnchor),
-            contentView.leadingAnchor.constraint(equalTo: visualEffect.leadingAnchor),
-            contentView.trailingAnchor.constraint(equalTo: visualEffect.trailingAnchor),
-        ])
-
-        self.contentView = visualEffect
         self.level = .floating
         self.isFloatingPanel = true
         self.hidesOnDeactivate = false
@@ -42,17 +36,40 @@ class FloatingPanel: NSPanel {
         self.titleVisibility = .hidden
         self.titlebarAppearsTransparent = true
 
-        // 圆角 + 阴影
         self.contentView?.wantsLayer = true
         self.contentView?.layer?.cornerRadius = 12
         self.contentView?.layer?.masksToBounds = true
 
         self.minSize = NSSize(width: 220, height: 80)
+        if let screenHeight = NSScreen.main?.visibleFrame.height {
+            self.maxSize = NSSize(width: 800, height: screenHeight * 0.8)
+        }
 
-        // 清掉旧的保存帧（UI 改版后尺寸可能不对）
+        // 根据内容计算初始尺寸
+        fitToContent()
+
+        // 监听内容尺寸变化
+        sizeObservation = hosting.observe(\.intrinsicContentSize, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.fitToContent() }
+        }
+
         NSWindow.removeFrame(usingName: "CCDockPanel")
         self.setFrameAutosaveName("CCDockPanel")
         positionAtTopRight()
+    }
+
+    private func fitToContent() {
+        let fitting = hostingView.fittingSize
+        guard fitting.height > 0 else { return }
+        let maxH = self.maxSize.height
+        let newWidth = min(max(fitting.width, self.minSize.width), self.maxSize.width)
+        let newHeight = min(fitting.height, maxH)
+        let newSize = NSSize(width: newWidth, height: newHeight)
+        guard abs(frame.size.width - newSize.width) > 1
+           || abs(frame.size.height - newSize.height) > 1 else { return }
+        // 保持顶部位置不变（macOS 坐标系 origin 在左下角）
+        let newY = frame.origin.y + frame.height - newHeight
+        self.setFrame(NSRect(x: frame.origin.x, y: newY, width: newWidth, height: newHeight), display: true)
     }
 
     private func positionAtTopRight() {
@@ -65,4 +82,20 @@ class FloatingPanel: NSPanel {
     }
 
     override var canBecomeKey: Bool { true }
+}
+
+/// NSVisualEffectView 的 SwiftUI 包装
+struct VisualEffectBackground: NSViewRepresentable {
+    let material: NSVisualEffectView.Material
+    let blendingMode: NSVisualEffectView.BlendingMode
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = material
+        view.blendingMode = blendingMode
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }

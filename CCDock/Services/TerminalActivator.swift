@@ -85,11 +85,18 @@ class TerminalActivator {
 
     // MARK: - tmux 方式
 
+    /// tmux 可能在 /opt/homebrew/bin 或 /usr/local/bin，.app 的 PATH 找不到
+    private lazy var tmuxPath: String? = {
+        let candidates = ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }()
+
     private func activateViaTmux(tty: String, projectName: String) -> Bool {
+        guard let tmux = tmuxPath else { return false }
         let fullTty = tty.hasPrefix("/dev/") ? tty : "/dev/\(tty)"
 
-        guard let tmuxOutput = runProcess("/usr/bin/env", args: [
-            "tmux", "list-panes", "-a",
+        guard let tmuxOutput = runProcess(tmux, args: [
+            "list-panes", "-a",
             "-F", "#{session_name}:#{window_index}.#{pane_index} #{pane_tty}"
         ]) else {
             return false
@@ -102,7 +109,7 @@ class TerminalActivator {
             let paneTty = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
 
             if paneTty == fullTty {
-                let _ = runProcess("/usr/bin/env", args: ["tmux", "select-window", "-t", target])
+                let _ = runProcess(tmux, args: ["select-window", "-t", target])
                 activateTerminalApp()
                 print("[TerminalActivator] ✅ tmux 切换到 \(projectName) (\(target))")
                 return true
