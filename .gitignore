@@ -6,3 +6,5 @@ xcuserdata/
 DerivedData/
 .DS_Store
 CCDock/Resources/AppIcon.iconset/
+.superpowers/
+*.zip

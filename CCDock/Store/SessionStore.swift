@@ -19,6 +19,10 @@ class SessionStore {
 
     func updateStatus(sessionId: String, status: SessionStatus) {
         if let index = sessions.firstIndex(where: { $0.id == sessionId }) {
+            // 状态变化时记录时间
+            if sessions[index].status != status {
+                sessions[index].statusChangedAt = Date()
+            }
             sessions[index].status = status
         }
     }
