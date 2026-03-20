@@ -133,10 +133,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func openLayoutEditor() {
-        // 关闭 popover
         popover?.performClose(nil)
 
-        if let existing = editorWindow, existing.isVisible {
+        // 复用已有窗口
+        if let existing = editorWindow {
             existing.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -151,8 +151,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.title = "CCDock - 自定义布局"
         window.contentView = NSHostingView(rootView: LayoutEditorView())
         window.center()
-        // 避免按钮获得蓝色焦点环
         window.initialFirstResponder = nil
+        // 窗口关闭时清空引用，下次重新创建
+        window.isReleasedWhenClosed = false
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.editorWindow = nil
+        }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         editorWindow = window

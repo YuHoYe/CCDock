@@ -15,6 +15,11 @@ let package = Package(
                 .linkedFramework("AppKit"),
                 .linkedFramework("SwiftUI"),
             ]
+        ),
+        .testTarget(
+            name: "CCDockTests",
+            dependencies: ["CCDock"],
+            path: "Tests"
         )
     ]
 )

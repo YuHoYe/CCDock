@@ -66,7 +66,6 @@ class StatusPoller {
     private func inferStatus(sessionId: String, cwd: String) -> SessionStatus {
         let logPath = jsonlPath(sessionId: sessionId, cwd: cwd)
 
-        // 检查文件修改时间
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: logPath),
               let modDate = attrs[.modificationDate] as? Date else {
             return .unknown
@@ -74,86 +73,13 @@ class StatusPoller {
 
         let timeSinceUpdate = Date().timeIntervalSince(modDate)
 
-        // 读最后几行判断最终状态
-        let lastEntry = readLastEntry(path: logPath)
-
-        switch lastEntry {
-        case .userMessage:
-            // 用户刚提交 prompt，一定在工作中
-            return .working
-
-        case .assistantStreaming:
-            // assistant 消息还没 end_turn，正在流式输出
-            return .working
-
-        case .assistantDone:
-            if timeSinceUpdate < staleThreshold {
-                // 刚完成，可能马上会有新的 user 消息
-                return .idle
-            }
-            return .idle
-
-        case .waitingInput:
-            return .waitingInput
-
-        case .unknown:
-            // 文件最近有更新 → 工作中；否则 → 未知
-            return timeSinceUpdate < staleThreshold ? .working : .unknown
-        }
-    }
-
-    private enum LastEntryType {
-        case userMessage
-        case assistantStreaming  // assistant 消息但没有 end_turn
-        case assistantDone      // assistant 消息且 stop_reason == end_turn
-        case waitingInput
-        case unknown
-    }
-
-    /// 从 jsonl 末尾读取最后一个有意义的条目
-    private func readLastEntry(path: String) -> LastEntryType {
-        guard let data = FileManager.default.contents(atPath: path),
+        guard let data = FileManager.default.contents(atPath: logPath),
               let content = String(data: data, encoding: .utf8) else {
             return .unknown
         }
 
-        // 从末尾往前扫描，找最后的 user/assistant/last-prompt 行
-        let lines = content.split(separator: "\n")
-        for line in lines.reversed() {
-            guard let lineData = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-                  let type = obj["type"] as? String else {
-                continue
-            }
-
-            if type == "user" {
-                return .userMessage
-            }
-
-            if type == "assistant" {
-                if let message = obj["message"] as? [String: Any],
-                   let stopReason = message["stop_reason"] as? String,
-                   stopReason == "end_turn" {
-                    return .assistantDone
-                }
-                return .assistantStreaming
-            }
-
-            // Claude Code 在 assistant 回复后会写 last-prompt
-            if type == "last-prompt" {
-                return .assistantDone
-            }
-
-            // tool_result 等中间状态 → 继续往前看
-            if type == "progress" || type == "queue-operation" {
-                continue
-            }
-        }
-
-        return .unknown
+        return StatusPoller.inferStatus(from: content, timeSinceUpdate: timeSinceUpdate, staleThreshold: staleThreshold)
     }
-
-    // MARK: - Prompt 读取
 
     private func readLastPrompt(sessionId: String, cwd: String) -> String? {
         let logPath = jsonlPath(sessionId: sessionId, cwd: cwd)
@@ -161,35 +87,16 @@ class StatusPoller {
               let content = String(data: data, encoding: .utf8) else {
             return nil
         }
-
-        // 找 last-prompt 或最后一条 user 消息
-        let lines = content.split(separator: "\n")
-        for line in lines.reversed() {
-            guard let lineData = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-                  let type = obj["type"] as? String else {
-                continue
-            }
-
-            if type == "last-prompt", let prompt = obj["lastPrompt"] as? String {
-                return prompt
-            }
-
-            if type == "user",
-               let message = obj["message"] as? [String: Any],
-               let content = message["content"] as? String {
-                return content
-            }
-        }
-        return nil
+        return StatusPoller.parseLastPrompt(from: content)
     }
-
-    // MARK: - Token 统计
 
     private func pollTokens() {
         let claudeSessions = store.sessions.filter { $0.agentType == .claude }
         for session in claudeSessions {
-            let metrics = parseSessionLog(sessionId: session.id, cwd: session.cwd)
+            let logPath = jsonlPath(sessionId: session.id, cwd: session.cwd)
+            guard let data = FileManager.default.contents(atPath: logPath),
+                  let content = String(data: data, encoding: .utf8) else { continue }
+            let metrics = StatusPoller.parseMetrics(from: content)
             store.updateMetrics(
                 sessionId: session.id,
                 turnCount: metrics.turnCount,
@@ -201,7 +108,81 @@ class StatusPoller {
         }
     }
 
-    private struct SessionMetrics {
+    // MARK: - 纯函数（可测试）
+
+    enum LastEntryType: Equatable {
+        case userMessage
+        case assistantStreaming
+        case assistantDone
+        case waitingInput
+        case unknown
+    }
+
+    /// 从 jsonl 内容推断最后一个有意义的条目类型
+    static func parseLastEntry(from content: String) -> LastEntryType {
+        let lines = content.split(separator: "\n")
+        for line in lines.reversed() {
+            guard let lineData = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                  let type = obj["type"] as? String else {
+                continue
+            }
+
+            if type == "user" { return .userMessage }
+
+            if type == "assistant" {
+                if let message = obj["message"] as? [String: Any],
+                   let stopReason = message["stop_reason"] as? String,
+                   stopReason == "end_turn" {
+                    return .assistantDone
+                }
+                return .assistantStreaming
+            }
+
+            if type == "last-prompt" { return .assistantDone }
+
+            // progress / queue-operation 等中间状态，继续往前找
+            if type == "progress" || type == "queue-operation" { continue }
+        }
+        return .unknown
+    }
+
+    /// 从 jsonl 内容 + 文件新鲜度推断会话状态
+    static func inferStatus(from content: String, timeSinceUpdate: TimeInterval, staleThreshold: TimeInterval = 30) -> SessionStatus {
+        let lastEntry = parseLastEntry(from: content)
+        switch lastEntry {
+        case .userMessage:       return .working
+        case .assistantStreaming: return .working
+        case .assistantDone:     return .idle
+        case .waitingInput:      return .waitingInput
+        case .unknown:
+            return timeSinceUpdate < staleThreshold ? .working : .unknown
+        }
+    }
+
+    /// 从 jsonl 内容提取最近的用户 prompt
+    static func parseLastPrompt(from content: String) -> String? {
+        let lines = content.split(separator: "\n")
+        for line in lines.reversed() {
+            guard let lineData = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                  let type = obj["type"] as? String else {
+                continue
+            }
+
+            if type == "last-prompt", let prompt = obj["lastPrompt"] as? String {
+                return prompt
+            }
+            if type == "user",
+               let message = obj["message"] as? [String: Any],
+               let content = message["content"] as? String {
+                return content
+            }
+        }
+        return nil
+    }
+
+    struct SessionMetrics {
         var tokens: Int = 0
         var turnCount: Int = 0
         var model: String?
@@ -209,14 +190,8 @@ class StatusPoller {
         var version: String?
     }
 
-    private func parseSessionLog(sessionId: String, cwd: String) -> SessionMetrics {
-        let logPath = jsonlPath(sessionId: sessionId, cwd: cwd)
-
-        guard let data = FileManager.default.contents(atPath: logPath),
-              let content = String(data: data, encoding: .utf8) else {
-            return SessionMetrics()
-        }
-
+    /// 从 jsonl 内容解析 token、轮数、模型等信息
+    static func parseMetrics(from content: String) -> SessionMetrics {
         var metrics = SessionMetrics()
         for line in content.split(separator: "\n") {
             guard let lineData = line.data(using: .utf8),
@@ -224,10 +199,7 @@ class StatusPoller {
 
             let type = obj["type"] as? String
 
-            // 统计 user 消息数作为轮数
-            if type == "user" {
-                metrics.turnCount += 1
-            }
+            if type == "user" { metrics.turnCount += 1 }
 
             if metrics.gitBranch == nil, let branch = obj["gitBranch"] as? String, !branch.isEmpty {
                 metrics.gitBranch = branch
