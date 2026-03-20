@@ -17,6 +17,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var popover: NSPopover?
     private var panel: FloatingPanel?
     private var editorWindow: NSWindow?
+    private var welcomeWindow: NSWindow?
     private var eventMonitor: Any?
 
     let store = SessionStore()
@@ -38,6 +39,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupMenuBar()
         setupPopover()
         startServices()
+        showWelcomeIfFirstLaunch()
     }
 
     private func setupAppIcon() {
@@ -153,6 +155,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         editorWindow = window
+    }
+
+    // MARK: - Welcome
+
+    private func showWelcomeIfFirstLaunch() {
+        let key = "hasLaunchedBefore"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 520),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.center()
+        window.level = .floating
+
+        window.contentView = NSHostingView(
+            rootView: WelcomeView {
+                window.close()
+            }
+        )
+
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        welcomeWindow = window
     }
 
     // MARK: - Services
