@@ -249,6 +249,7 @@ struct SessionRowView: View {
     }
 
     private var titleColor: Color {
+        if session.justCompleted { return .primary }
         switch session.status {
         case .waitingInput: return .primary
         case .working: return .primary
@@ -258,6 +259,7 @@ struct SessionRowView: View {
     }
 
     private var statusAccentColor: Color {
+        if session.justCompleted { return .green }
         switch session.status {
         case .working: return .blue
         case .waitingInput: return .orange
@@ -267,6 +269,7 @@ struct SessionRowView: View {
     }
 
     private var statusBackgroundColor: Color {
+        if session.justCompleted { return isHovered ? .green.opacity(0.2) : .green.opacity(0.15) }
         switch session.status {
         case .working: return isHovered ? .blue.opacity(0.1) : .blue.opacity(0.05)
         case .waitingInput: return isHovered ? .orange.opacity(0.15) : .orange.opacity(0.1)
@@ -288,7 +291,7 @@ struct StatusBadge: View {
                     .font(.system(size: 10))
             }
             if session.status == .idle {
-                Text("✓")
+                Text(session.justCompleted ? "✅" : "✓")
                     .font(.system(size: 10))
             }
             Text(badgeText)
@@ -304,33 +307,39 @@ struct StatusBadge: View {
     private var badgeText: String {
         let statusLabel = session.status.rawValue
         let duration = session.statusDurationText
-        if duration.isEmpty { return statusLabel }
 
         switch session.status {
-        case .working: return "\(statusLabel) \(duration)"
-        case .waitingInput: return statusLabel
-        case .idle: return "\(duration) 前完成"
-        case .unknown: return statusLabel
+        case .working:
+            return duration.isEmpty ? statusLabel : "\(statusLabel) \(duration)"
+        case .waitingInput:
+            return statusLabel
+        case .idle:
+            return session.justCompleted ? "刚刚完成!" : (duration.isEmpty ? statusLabel : "\(duration) 前完成")
+        case .unknown:
+            return statusLabel
         }
     }
 
     private var badgeWeight: Font.Weight {
-        session.status == .waitingInput ? .bold : .regular
+        if session.justCompleted { return .bold }
+        return session.status == .waitingInput ? .bold : .regular
     }
 
     private var badgeBackground: Color {
+        if session.justCompleted { return .green }
         switch session.status {
         case .working: return .blue.opacity(0.2)
-        case .waitingInput: return .orange          // 实底
+        case .waitingInput: return .orange
         case .idle: return .green.opacity(0.1)
         case .unknown: return .gray.opacity(0.1)
         }
     }
 
     private var badgeTextColor: Color {
+        if session.justCompleted { return .white }
         switch session.status {
         case .working: return .blue
-        case .waitingInput: return .black           // 实底上用黑字
+        case .waitingInput: return .black
         case .idle: return .green.opacity(0.7)
         case .unknown: return .gray
         }
@@ -399,6 +408,9 @@ struct SessionListView: View {
                 VStack(spacing: 1) {
                     ForEach(store.sessions) { session in
                         SessionRowView(session: session) {
+                            if session.justCompleted {
+                                store.clearJustCompleted(sessionId: session.id)
+                            }
                             activator.activate(session: session)
                         }
                     }

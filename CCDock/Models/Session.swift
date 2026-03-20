@@ -43,6 +43,7 @@ struct Session: Identifiable {
     let startedAt: Date
     var agentType: AgentType = .claude
     var status: SessionStatus
+    var justCompleted: Bool = false
     var lastPrompt: String?
     var tty: String?
     var turnCount: Int = 0

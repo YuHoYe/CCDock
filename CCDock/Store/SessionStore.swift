@@ -20,8 +20,18 @@ class SessionStore {
     func updateStatus(sessionId: String, status: SessionStatus) {
         guard let index = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
         guard sessions[index].status != status else { return }
+        // working → idle 时标记为"刚完成"
+        let wasWorking = sessions[index].status == .working
         sessions[index].statusChangedAt = Date()
         sessions[index].status = status
+        if wasWorking && status == .idle {
+            sessions[index].justCompleted = true
+        }
+    }
+
+    func clearJustCompleted(sessionId: String) {
+        guard let index = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        sessions[index].justCompleted = false
     }
 
     func updatePrompt(sessionId: String, prompt: String) {
